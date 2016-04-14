@@ -27,6 +27,7 @@ namespace DySense
             { "timed_out", "bad" },
             { "error", "bad" },
             { "bad_data_quality", "bad" },
+            { "low_battery", "bad" },
         };
 
         // Unique sensor ID assigned by user.

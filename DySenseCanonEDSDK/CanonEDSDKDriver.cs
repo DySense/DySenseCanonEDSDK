@@ -18,12 +18,22 @@ namespace DySenseCanonEDSDK
         double lastTriggerUtcTime = 0;
         double lastTriggerSysTime = 0;
 
-        List<Camera> CameraList;
         SDKHandler CameraHandler;
+
+        // Serial number of camera to connect to.
+        string serialNumber;
+
+        double captureLatency;
+
+        bool lowBatteryCheck = false;
+
+        bool lowBattery = false;
+
+        bool portInUse = false;
 
         bool receivedNewImage = true;
 
-        bool cameraErrorOccurred = false;
+        bool unhandledCameraErrorOccurred = false;
 
         // Where to save output images to.
         string outDirectory;
@@ -35,6 +45,9 @@ namespace DySenseCanonEDSDK
         {
             this.outDirectory = Convert.ToString(settings["out_directory"]);
             this.imageTriggerPeriod = Convert.ToDouble(settings["trigger_period"]);
+            this.serialNumber = Convert.ToString(settings["serial_number"]);
+            this.captureLatency = Convert.ToDouble(settings["capture_latency"]) / 1000.0;
+            this.lowBatteryCheck = Convert.ToBoolean(settings["battery_check"]);
 
             // The desired read period is set much faster than actual trigger period so we can constantly check for SDK events.
             base.DesiredReadPeriod = 0.1; // seconds
@@ -58,34 +71,54 @@ namespace DySenseCanonEDSDK
             // Tell the handler where to save the images.
             CameraHandler.ImageSaveDirectory = outDirectory;
 
-            RefreshCamera();
+            TryOpenSession();
         }
 
         protected void CheckForEdsdkEvents()
         {
             EDSDK.EdsGetEvent();
-            if (this.cameraErrorOccurred)
+            if (this.unhandledCameraErrorOccurred)
             {
                 throw new Exception("Unhandled camera error.");
             }
         }
 
+        // I think this is running from the EDSDK thread.
         void CameraHandler_CameraError(uint errorID)
         {
-            // I think this is running from the EDSDK thread.
-            if (errorID == 0x81)
+            string errorString = String.Format("0x{0}", errorID.ToString("X"));
+            if (errorToString.ContainsKey(errorID))
             {
-                return; // this is from overtriggering so don't worry about it.
+                errorString = errorToString[errorID];
             }
-            SendText(String.Format("Camera Error 0x{0}", errorID.ToString("X")));
-            this.cameraErrorOccurred = true;
+
+            // Port is already opened by another driver instance.
+            if (errorID == EDSDK.EDS_ERR_COMM_PORT_IS_IN_USE)
+            {
+                this.portInUse = true;
+            }
+            
+            if (recoverableErrors.ContainsKey(errorID))
+            {
+                bool printMessage = recoverableErrors[errorID];
+                if (printMessage)
+                {
+                    SendText("Camera Error: " + errorString);
+                }
+            }
+            else // can't recover or don't know if can recover from error.
+            {
+                SendText("Unhandled Camera Error: " + errorString);
+                this.unhandledCameraErrorOccurred = true;
+            }
         }
 
         void CameraHandler_NewImageDownloaded(string filePath)
         {
             // TODO rename and just log new filename.
-            SendText(String.Format("Downloaded {0}", filePath));
-            HandleData(UtcTime, SysTime, new List<object>() { filePath });
+            string imageFilename = Path.GetFileName(filePath);
+            SendText(String.Format("Downloaded {0}", imageFilename));
+            HandleData(lastTriggerUtcTime, lastTriggerSysTime, new List<object>() { imageFilename, lastTriggerSysTime });
 
             // Set flag so we know we can trigger again.
             receivedNewImage = true;
@@ -93,61 +126,67 @@ namespace DySenseCanonEDSDK
 
         private void SDK_CameraAdded()
         {
-            SendText("New camera added.");
-            RefreshCamera();
+            string cameraType = CameraHandler.MainCamera.Info.szDeviceDescription;
+            SendText("Detected " + cameraType);
+            TryOpenSession();
         }
 
         private void SDK_CameraHasShutdown(object sender, EventArgs e)
         {
+            // TODO - check which camera closed??
             SendText("Camera has shutdown.");
-            CloseSession();
-        }
-
-        private uint handler_SDKObjectEvent(uint inEvent, IntPtr inRef, IntPtr inContext)
-        {
-            //handle object event here
-            switch (inEvent)
-            {
-                case EDSDK.ObjectEvent_DirItemRequestTransfer:
-                    //CameraHandler.DownloadImage(inRef, ImageSaveDirectory);
-                    break;
-            }
-            return EDSDK.EDS_ERR_OK;
-        }
-
-        private void OpenSession()
-        {
-            if (CameraList.Count == 0) 
-            {
-                SendText("Can't open cam session because no valid cameras.");
-                return;
-            }
-            CameraHandler.OpenSession(CameraList[0]);
-            string cameraName = CameraHandler.MainCamera.Info.szDeviceDescription;
-            SendText(String.Format("Opened session with {0}", cameraName));
-            if (CameraHandler.GetSetting(EDSDK.PropID_AEMode) != EDSDK.AEMode_Manual)
-            {
-                SendText("Camera is not in manual mode. Some features might not work!");
-            }
-            // Tell the camera to send back images instead of saving to card.
-            CameraHandler.SetSetting(EDSDK.PropID_SaveTo, (uint)EDSDK.EdsSaveTo.Host);
-            CameraHandler.SetCapacity();
-
-            CheckForEdsdkEvents();
-        }
-
-        private void CloseSession()
-        {
             CameraHandler.CloseSession();
-            RefreshCamera();
         }
 
-        private void RefreshCamera()
+        private void TryOpenSession()
         {
-            CameraList = CameraHandler.GetCameraList();
-            if (!CameraHandler.CameraSessionOpen)
+            if (CameraHandler.CameraSessionOpen)
             {
-                OpenSession();
+                return; // Camera session already opened.
+            }
+
+            foreach (Camera camera in CameraHandler.GetCameraList())
+            {
+                // Have to open a session to query the body ID (ie the serial number) to check
+                // if it matches the one we're looking for.
+                CameraHandler.OpenSession(camera);
+                string bodyID = CameraHandler.GetStringSetting(EDSDK.PropID_BodyIDEx);
+
+                // Make sure another driver instance isn't already communicating with camera.
+                CheckForEdsdkEvents();
+                if (this.portInUse)
+                {
+                    this.portInUse = false; // reset flag for next camera.
+                    CameraHandler.CloseSession();
+                    continue; // check if next camera doesn't have a session open yet.
+                }
+
+                if (bodyID == this.serialNumber)
+                {
+                    SendText("Found matching serial number. Camera connected.");
+
+                    if (CameraHandler.GetSetting(EDSDK.PropID_AEMode) != EDSDK.AEMode_Manual)
+                    {
+                        SendText("Camera is not in manual mode. Some features might not work!");
+                    }
+
+                    uint batteryLevel = CameraHandler.GetSetting(EDSDK.PropID_BatteryLevel);
+
+                    this.lowBattery = (batteryLevel == EDSDK.BatteryLevel_Low) || (batteryLevel == EDSDK.BatteryLevel_Empty);
+
+                    // Tell the camera to send back images instead of saving to card.
+                    CameraHandler.SetSetting(EDSDK.PropID_SaveTo, (uint)EDSDK.EdsSaveTo.Host);
+                    CameraHandler.SetCapacity();
+
+                    CheckForEdsdkEvents();
+
+                    break; // from camera loop since found right sensor
+                }
+                else
+                {
+                    SendText(String.Format("Not connecting to camera because serial number ({0}) doesn't match driver.", bodyID));
+                    CameraHandler.CloseSession();
+                }
             }
         }
 
@@ -176,6 +215,9 @@ namespace DySenseCanonEDSDK
             // Make sure we should be triggering at all.
             if (!ShouldRecordData()) { return; }
 
+            // Make sure battery isn't too low.
+            if (this.lowBatteryCheck && lowBattery) { return;  }
+
             // Don't trigger again until we've gotten the last image.
             if (!receivedNewImage) { return; }
 
@@ -195,6 +237,11 @@ namespace DySenseCanonEDSDK
             if (!CameraHandler.CameraSessionOpen)
             {
                 return "timed_out";
+            }
+
+            if (this.lowBatteryCheck && lowBattery)
+            {
+                return "low_battery";
             }
 
             if (!ShouldRecordData())
@@ -219,18 +266,41 @@ namespace DySenseCanonEDSDK
 
         protected void Trigger()
         {
-            lastTriggerUtcTime = UtcTime;
-            lastTriggerSysTime = SysTime;
+            // Add on latency to timestamps to account for the time before image is exposed.
+            lastTriggerUtcTime = UtcTime + captureLatency;
+            lastTriggerSysTime = SysTime + captureLatency;
             CameraHandler.TakePhoto();
         }
 
         protected override void HandleSpecialCommand(string command)
         {
-            if (command.ToLower() == "trigger")
+            if (command.ToLower() == "trigger_once")
             {
                 SendText("Manual trigger");
                 Trigger();
             }
         }
+
+        # region ErrorMappings
+
+        // Value is whether or not to show an error message when error occurs.
+        Dictionary<uint, bool> recoverableErrors = new Dictionary<uint, bool>
+        {
+            { EDSDK.EDS_ERR_DEVICE_BUSY, false },
+            { EDSDK.EDS_ERR_COMM_PORT_IS_IN_USE, false },
+            { EDSDK.EDS_ERR_COMM_DISCONNECTED, false },
+        };
+
+        #endregion
+
+        # region ErrorMappings
+
+        Dictionary<uint, string> errorToString = new Dictionary<uint, string> 
+        {
+            { EDSDK.EDS_ERR_COMM_PORT_IS_IN_USE, "Port in use." },
+            { EDSDK.EDS_ERR_COMM_DISCONNECTED, "Port disconnected." },
+        };
+
+        #endregion
     }
 }
