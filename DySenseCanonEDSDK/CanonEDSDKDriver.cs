@@ -35,15 +35,12 @@ namespace DySenseCanonEDSDK
 
         bool unhandledCameraErrorOccurred = false;
 
-        // Where to save output images to.
-        string outDirectory;
-
         double TimeSinceLastTrigger { get { return SysTime - lastTriggerSysTime; } }
 
         public CanonEDSDKDriver(string sensorID, string instrumentID, Dictionary<string, object> settings, string connectEndpoint)
             : base(sensorID, instrumentID, connectEndpoint, decideTimeout: false)
         {
-            this.outDirectory = Convert.ToString(settings["out_directory"]);
+            this.defaultDataFileDirectory = Convert.ToString(settings["out_directory"]);
             this.imageTriggerPeriod = Convert.ToDouble(settings["trigger_period"]);
             this.serialNumber = Convert.ToString(settings["serial_number"]);
             this.captureLatency = Convert.ToDouble(settings["capture_latency"]) / 1000.0;
@@ -56,9 +53,9 @@ namespace DySenseCanonEDSDK
 
         protected override void Setup()
         {
-            if (!Directory.Exists(outDirectory))
+            if (!String.IsNullOrWhiteSpace(CurrentDataFileDirectory) && !Directory.Exists(CurrentDataFileDirectory))
             {
-                Directory.CreateDirectory(outDirectory);
+                Directory.CreateDirectory(CurrentDataFileDirectory);
             }
 
             CameraHandler = new SDKHandler();
@@ -69,7 +66,7 @@ namespace DySenseCanonEDSDK
             CameraHandler.CameraError += CameraHandler_CameraError;
 
             // Tell the handler where to save the images.
-            CameraHandler.ImageSaveDirectory = outDirectory;
+            CameraHandler.ImageSaveDirectory = CurrentDataFileDirectory;
 
             TryOpenSession();
         }
@@ -261,6 +258,23 @@ namespace DySenseCanonEDSDK
             else
             {
                 return "normal";
+            }
+        }
+
+        protected override void DriverHandleNewSetting(string settingName, object settingValue)
+        {
+            if (settingName == "data_file_directory")
+            {
+                // Data file directory might have changed so make sure directory exists.
+                if (!String.IsNullOrWhiteSpace(CurrentDataFileDirectory) && !Directory.Exists(CurrentDataFileDirectory))
+                {
+                    Directory.CreateDirectory(CurrentDataFileDirectory);
+                }
+
+                if (CameraHandler != null)
+                {
+                    CameraHandler.ImageSaveDirectory = CurrentDataFileDirectory;
+                }
             }
         }
 
