@@ -110,12 +110,19 @@ namespace DySenseCanonEDSDK
             }
         }
 
-        void CameraHandler_NewImageDownloaded(string filePath)
+        void CameraHandler_NewImageDownloaded(string originalFilePath)
         {
-            // TODO rename and just log new filename.
-            string imageFilename = Path.GetFileName(filePath);
-            SendText(String.Format("Downloaded {0}", imageFilename));
-            HandleData(lastTriggerUtcTime, lastTriggerSysTime, new List<object>() { imageFilename, lastTriggerSysTime });
+            // Format current (Unix) UTC time so we can use it when renaming file.
+            DateTime dateTime = new DateTime(1970,1,1,0,0,0,0,System.DateTimeKind.Utc);
+            dateTime = dateTime.AddSeconds(lastTriggerUtcTime);
+            string formattedTime = dateTime.ToString("yyyyMMdd_hhmmss_fff"); 
+
+            string originalImageFilename = Path.GetFileName(originalFilePath);
+            string newFileName = String.Format("{0}_{1}_{2}", InstrumentID, formattedTime, originalImageFilename);
+            string newFilePath = Path.Combine(CurrentDataFileDirectory, newFileName);
+            File.Move(originalFilePath, newFilePath);
+
+            HandleData(lastTriggerUtcTime, lastTriggerSysTime, new List<object>() { newFileName, lastTriggerSysTime });
 
             // Set flag so we know we can trigger again.
             receivedNewImage = true;
