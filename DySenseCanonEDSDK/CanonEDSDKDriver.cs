@@ -187,8 +187,6 @@ namespace DySenseCanonEDSDK
                 return;
             }
 
-            if (camImageNumber == 4) { return; } // pretend like we never got 4
-
             lastReceivedSysTime = SysTime;
 
             // Detect if camera numbering rolled over from 9999 to 1.
@@ -214,28 +212,6 @@ namespace DySenseCanonEDSDK
             // Convert image number into OUR numbering scheme (i.e. doesn't wrap at 9999)
             int imageNumber = camImageNumber + (numberOfTimesNumberingRolledOver * 9999);
 
-            
-            SendText(String.Format("{0} - {1}", triggerImageInfo.Count, bufferedImageInfo.Count));
-            string t = "";
-            foreach (TriggerImageInfo k in triggerImageInfo)
-            {
-                t += k.expectedImageNumber.ToString() + ", ";
-            }
-            if (t != "")
-            {
-                SendText("Trig: " + t);
-            }
-  
-            string j = "";
-            foreach (ReceivedImageInfo w in bufferedImageInfo)
-            {
-                j += w.imageNumber.ToString() + ", ";
-            }
-            if (j != "")
-            {
-                SendText("Buff: " + j);
-            }
-
             // Find matching number in trigger info so we know what time the picture was taken at.
             // Iterate backwards through list so we can safetly delete elements.
             // If we haven't received first image yet then we want to use the first triggerInfo and clear the entire list.
@@ -256,8 +232,6 @@ namespace DySenseCanonEDSDK
                 DontKnowWhatNumberToExpect();
                 return;
             }
-
-            SendText("Mtch: " + matchingTrigger.expectedImageNumber.ToString());
 
             // We have valid information for our newly downloaded image.
             ReceivedImageInfo receivedInfo = new ReceivedImageInfo(originalFilePath, matchingTrigger, imageType, imageNumber, camImageNumber, imageExtension);
@@ -282,7 +256,6 @@ namespace DySenseCanonEDSDK
                 }
                 else if (matchingTrigger.expectedImageNumber > nextExpectedReceivedNumber)
                 {
-                    SendText("Out of ORDER");
                     // Received image out of order.  This is normal.  Just buffer it to write it out later.
                     handleNewImageRightNow = false;
                     bufferedImageInfo.Add(receivedInfo);
@@ -308,7 +281,7 @@ namespace DySenseCanonEDSDK
                         ReceivedImageInfo info = bufferedImageInfo[i];
                         if (info.triggerInfo.expectedImageNumber == nextExpectedReceivedNumber)
                         {
-                            SendText("Next Flushing " + info.imageNumber);
+                            //SendText("Flushing " + info.imageNumber);
                             RenameAndHandleNewImageInfo(info);
                             nextExpectedReceivedNumber++;
                             bufferedImageInfo.RemoveAt(i);
@@ -327,7 +300,7 @@ namespace DySenseCanonEDSDK
                     List<ReceivedImageInfo> sortedBufferedImageInfo = bufferedImageInfo.OrderBy(o => o.triggerInfo.expectedImageNumber).ToList();
                     foreach (ReceivedImageInfo info in sortedBufferedImageInfo)
                     {
-                        SendText("Fail Flushing " + info.imageNumber);
+                        //SendText("Fail Flushing " + info.imageNumber);
                         RenameAndHandleNewImageInfo(info);
                     }
                     DontKnowWhatNumberToExpect();
