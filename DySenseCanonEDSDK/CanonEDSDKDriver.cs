@@ -635,6 +635,8 @@ namespace DySenseCanonEDSDK
         {
             { EDSDK.EDS_ERR_COMM_PORT_IS_IN_USE, "Port in use." },
             { EDSDK.EDS_ERR_COMM_DISCONNECTED, "Port disconnected." },
+            { EDSDK.EDS_ERR_STREAM_OPEN_ERROR, "Cannot open camera stream." },
+            { EDSDK.EDS_ERR_INVALID_HANDLE, "Invalid handle." },
         };
 
         #endregion
