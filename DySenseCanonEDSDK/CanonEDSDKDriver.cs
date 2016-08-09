@@ -546,9 +546,17 @@ namespace DySenseCanonEDSDK
             nextExpectedTriggerNumber++;
         }
 
-        protected override void HandleSpecialCommand(string command)
+        protected override void Resume()
         {
-            if (command.ToLower() == "trigger_once")
+            base.Resume();
+
+            // Pretend like we just got an image to prevent unnecessary timeout after being paused. 
+            lastReceivedSysTime = SysTime;
+        }
+
+        protected override void HandleSpecialCommand(string commandName, object commandArgs)
+        {
+            if (commandName == "trigger_once")
             {
                 SendText("Manual trigger");
                 Trigger();
